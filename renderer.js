@@ -1,11 +1,9 @@
-// utils/enhanced-renderer.js
-const { ipcRenderer } = require('electron');
-const marked = require('marked');
-const TurndownService = require('turndown');
-const turndownService = new TurndownService();
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
+// renderer.js - Complete refreshed file
+// Handles the renderer process for the Kindle Newsletter Formatter
+
+// IPC Communication with main process through the secure bridge
+const { ipc, dialog, fs } = window.electron;
+const path = window.path;
 
 // UI Elements
 const dropZone = document.getElementById('eml-drop-zone');
@@ -18,14 +16,14 @@ const openFileBtn = document.getElementById('open-pdf-btn');
 const showInFolderBtn = document.getElementById('show-in-folder-btn');
 const openSendToKindleBtn = document.getElementById('open-send-to-kindle-btn');
 
-// NEW: Format Selection
+// Format Selection
 const formatOptions = document.querySelectorAll('input[name="format"]');
 
-// NEW: Template Dialog Elements
+// Template Dialog Elements
 const templateDialog = document.getElementById('template-dialog');
 const detectedName = document.getElementById('detected-name');
-const detectedType = document.getElementById('detected-type').querySelector('span');
-const detectedConfidence = document.getElementById('detected-confidence').querySelector('span');
+const detectedType = document.getElementById('detected-type')?.querySelector('span');
+const detectedConfidence = document.getElementById('detected-confidence')?.querySelector('span');
 const templateSelector = document.getElementById('template-selector');
 const templatePreview = document.getElementById('template-preview-content');
 const templateConfirmBtn = document.getElementById('template-confirm-btn');
@@ -37,26 +35,27 @@ let generatedFilePath = null;
 let additionalGeneratedFiles = [];
 let generatedFileFormat = 'epub'; // Default format
 let isProcessing = false;
-let detectedNewsletterInfo = null; // NEW: Store detected newsletter info
-let selectedTemplate = null; // NEW: Store selected template
-let selectedFormat = 'auto'; // NEW: Store selected format
-let progressInterval = null; // NEW: Store progress animation interval
+let detectedNewsletterInfo = null; // Store detected newsletter info
+let selectedTemplate = null; // Store selected template
+let selectedFormat = 'auto'; // Store selected format
+let progressInterval = null; // Store progress animation interval
 
 // Init
 document.addEventListener('DOMContentLoaded', () => {
   setupEventListeners();
   setupDragAndDrop();
+  addFilePicker();
 
-  console.log('Renderer initialized');
+  console.log('[Renderer] Initialized');
 
   // Set initial output path display
-  const userHome = require('os').homedir();
-  const downloadDir = path.join(userHome, 'Downloads', 'kindle-books');
+  const userHome = '/Users'; // Simplified since os.homedir() isn't available
+  const downloadDir = `${userHome}/Downloads/kindle-books`;
   outputPathDisplay.textContent = downloadDir;
 
   // Set initial selected format
-  selectedFormat = document.querySelector('input[name="format"]:checked').value || 'auto';
-  console.log(`Initial format selected: ${selectedFormat}`);
+  selectedFormat = document.querySelector('input[name="format"]:checked')?.value || 'auto';
+  console.log(`[Renderer] Initial format selected: ${selectedFormat}`);
 
   // Update button text to reflect ebook format
   if (openFileBtn) {
@@ -68,134 +67,9 @@ document.addEventListener('DOMContentLoaded', () => {
     generateKindleBtn.textContent = 'Generate Kindle Ebook';
   }
 
-  // Update drop zone text to include PDF files
-  const dropZoneTitle = document.querySelector('.eml-drop-zone h2');
-  if (dropZoneTitle) {
-    dropZoneTitle.textContent = 'Drop Email or PDF Files Here';
-  }
-
-  const dropZoneDescription = document.querySelector('.eml-drop-zone p');
-  if (dropZoneDescription) {
-    dropZoneDescription.textContent = 'Drop one or multiple email newsletter (.eml) or PDF files to convert for Kindle';
-  }
-});
-
-// Event Listeners
-function setupEventListeners() {
-  clearBtn.addEventListener('click', clearContent);
-
-  openFileBtn.addEventListener('click', () => {
-    if (generatedFilePath) {
-      ipcRenderer.send('open-file', { filePath: generatedFilePath });
-    }
-  });
-
-  showInFolderBtn.addEventListener('click', () => {
-    if (generatedFilePath) {
-      ipcRenderer.send('show-in-folder', { filePath: generatedFilePath });
-    }
-  });
-
-  if (openSendToKindleBtn) {
-    openSendToKindleBtn.addEventListener('click', () => {
-      ipcRenderer.send('open-send-to-kindle');
-      showStatus('Opening Send to Kindle...', 'info', 3000);
-    });
-  }
-
-  // Enable generate button and add event listener
-  if (generateKindleBtn) {
-    generateKindleBtn.addEventListener('click', () => {
-      if (uploadedFiles.length > 0 && !isProcessing) {
-        processDroppedFiles();
-      }
-    });
-  }
-
-  // NEW: Format selection listener (updated)
-  formatOptions.forEach(option => {
-    option.addEventListener('change', () => {
-      selectedFormat = document.querySelector('input[name="format"]:checked').value;
-      console.log(`Format changed to: ${selectedFormat}`);
-
-      // Update button state if we have files
-      if (uploadedFiles.length > 0) {
-        updateGenerateButtonState(true);
-      }
-    });
-  });
-
-  // NEW: Template dialog listeners
-  templateConfirmBtn.addEventListener('click', () => {
-    const selectedTemplateValue = templateSelector.value;
-
-    // Store selected template (or null for auto)
-    selectedTemplate = selectedTemplateValue === 'auto' ? null : selectedTemplateValue;
-
-    // Close dialog
-    templateDialog.classList.remove('active');
-
-    // Proceed with file processing
-    processDroppedFiles();
-  });
-
-  templateCancelBtn.addEventListener('click', () => {
-    // Reset template selection
-    templateSelector.value = 'auto';
-    selectedTemplate = null;
-
-    // Close dialog
-    templateDialog.classList.remove('active');
-
-    // Proceed with file processing
-    processDroppedFiles();
-  });
-
-  // Template selector change handler to update preview
-  templateSelector.addEventListener('change', updateTemplatePreview);
-
-  // Listen for file operation results
-  ipcRenderer.on('file-operation-result', (event, result) => {
-    if (!result.success) {
-      showStatus(`Operation failed: ${result.error}`, 'error', 5000);
-    }
-  });
-
-  // Listen for file dropped event from main process
-  ipcRenderer.on('file-dropped', (event, filePaths) => {
-    console.log('Received file-dropped event:', filePaths);
-    if (Array.isArray(filePaths) && filePaths.length > 0) {
-      handleSelectedFiles(filePaths.map(path => ({ path })));
-    } else {
-      console.error('Invalid file paths received in file-dropped event:', filePaths);
-      showStatus('Error: Invalid file paths received. Please try again.', 'error', 5000);
-    }
-  });
-
-  // NEW: Newsletter info event listener
-  ipcRenderer.on('newsletter-info', (event, info) => {
-    console.log('Received newsletter-info event:', info);
-    if (info && info.type) {
-      // Store newsletter info
-      detectedNewsletterInfo = info;
-
-      // Show template confirmation dialog
-      showTemplateConfirmation(info);
-    } else {
-      // If no newsletter info or generic type, proceed with default
-      processDroppedFiles();
-    }
-  });
-
-  // NEW: Progress update event listener
-  ipcRenderer.on('progress-update', (event, data) => {
-    console.log('Received progress update:', data);
-    updateProgressDisplay(data.percentage, data.status);
-  });
-
-  // Updated event name to match main.js
-  ipcRenderer.on('ebook-generated', (event, result) => {
-    console.log('Received ebook-generated event:', result);
+  // Set up IPC event listeners
+  ipc.on('ebook-generated', (result) => {
+    console.log('[Renderer] Received ebook-generated event:', result);
     isProcessing = false;
     dropZone.classList.remove('processing');
 
@@ -284,7 +158,7 @@ function setupEventListeners() {
       const retryButton = document.getElementById('retry-conversion');
       if (retryButton) {
         retryButton.addEventListener('click', () => {
-          processDroppedFiles(); // Retry with the same files
+          processSelectedFiles();
         });
       }
     }
@@ -293,14 +167,450 @@ function setupEventListeners() {
     updateGenerateButtonState(uploadedFiles.length > 0);
   });
 
-  ipcRenderer.on('error', (event, message) => {
+  ipc.on('file-dropped', (filePaths) => {
+    console.log('[Renderer] Received file-dropped event:', filePaths);
+    if (Array.isArray(filePaths) && filePaths.length > 0) {
+      handleSelectedFiles(filePaths);
+    } else {
+      console.error('[Renderer] Invalid file paths received:', filePaths);
+      showStatus('Error: Invalid file paths received. Please try again.', 'error', 5000);
+    }
+  });
+
+  ipc.on('newsletter-info', (info) => {
+    console.log('[Renderer] Received newsletter-info event:', info);
+    if (info && info.type) {
+      // Store newsletter info
+      detectedNewsletterInfo = info;
+
+      // Show template confirmation dialog
+      showTemplateConfirmation(info);
+    } else {
+      // If no newsletter info or generic type, proceed with default
+      processSelectedFiles();
+    }
+  });
+
+  ipc.on('progress-update', (data) => {
+    console.log('[Renderer] Received progress update:', data);
+    updateProgressDisplay(data.percentage, data.status);
+  });
+
+  ipc.on('error', (message) => {
     showStatus(`Error: ${message}`, 'error', 5000);
+  });
+});
+
+// Event Listeners
+function setupEventListeners() {
+  if (clearBtn) {
+    clearBtn.addEventListener('click', clearContent);
+  }
+
+  if (openFileBtn) {
+    openFileBtn.addEventListener('click', () => {
+      if (generatedFilePath) {
+        ipc.send('open-file', { filePath: generatedFilePath });
+      }
+    });
+  }
+
+  if (showInFolderBtn) {
+    showInFolderBtn.addEventListener('click', () => {
+      if (generatedFilePath) {
+        ipc.send('show-in-folder', { filePath: generatedFilePath });
+      }
+    });
+  }
+
+  if (openSendToKindleBtn) {
+    openSendToKindleBtn.addEventListener('click', () => {
+      ipc.send('open-send-to-kindle');
+      showStatus('Opening Send to Kindle...', 'info', 3000);
+    });
+  }
+
+  // Enable generate button and add event listener
+  if (generateKindleBtn) {
+    generateKindleBtn.addEventListener('click', () => {
+      if (uploadedFiles.length > 0 && !isProcessing) {
+        processSelectedFiles();
+      }
+    });
+  }
+
+  // Format selection listener
+  if (formatOptions) {
+    formatOptions.forEach(option => {
+      option.addEventListener('change', () => {
+        selectedFormat = document.querySelector('input[name="format"]:checked')?.value || 'auto';
+        console.log(`[Renderer] Format changed to: ${selectedFormat}`);
+
+        // Update button state if we have files
+        if (uploadedFiles.length > 0) {
+          updateGenerateButtonState(true);
+        }
+      });
+    });
+  }
+
+  // Template dialog listeners
+  if (templateConfirmBtn) {
+    templateConfirmBtn.addEventListener('click', () => {
+      const selectedTemplateValue = templateSelector.value;
+
+      // Store selected template (or null for auto)
+      selectedTemplate = selectedTemplateValue === 'auto' ? null : selectedTemplateValue;
+
+      // Close dialog
+      templateDialog.classList.remove('active');
+
+      // Proceed with file processing
+      processSelectedFiles();
+    });
+  }
+
+  if (templateCancelBtn) {
+    templateCancelBtn.addEventListener('click', () => {
+      // Reset template selection
+      if (templateSelector) templateSelector.value = 'auto';
+      selectedTemplate = null;
+
+      // Close dialog
+      templateDialog.classList.remove('active');
+
+      // Proceed with file processing
+      processSelectedFiles();
+    });
+  }
+
+  // Template selector change handler to update preview
+  if (templateSelector) {
+    templateSelector.addEventListener('change', updateTemplatePreview);
+  }
+}
+
+// Add a file picker button to the UI
+function addFilePicker() {
+  // Create a file picker button if it doesn't exist
+  if (!document.getElementById('file-picker-btn')) {
+    const pickerBtn = document.createElement('button');
+    pickerBtn.id = 'file-picker-btn';
+    pickerBtn.className = 'secondary-btn';
+    pickerBtn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 5px; vertical-align: text-bottom;"><path d="M3 15v4c0 1.1.9 2 2 2h14a2 2 0 0 0 2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg> Select Files';
+    pickerBtn.style.marginRight = '10px';
+    
+    // Add click handler for the file picker
+    pickerBtn.addEventListener('click', openFilePicker);
+    
+    // Add the button to the actions section
+    const actionsDiv = document.querySelector('.actions');
+    if (actionsDiv) {
+      actionsDiv.insertBefore(pickerBtn, actionsDiv.firstChild);
+    }
+  }
+}
+
+// Open the native file dialog
+function openFilePicker() {
+  if (isProcessing) return;
+  
+  if (dialog && typeof dialog.showOpenDialog === 'function') {
+    dialog.showOpenDialog({
+      title: 'Select Email or PDF Files',
+      properties: ['openFile', 'multiSelections'],
+      filters: [
+        { name: 'Email & PDF Files', extensions: ['eml', 'pdf'] },
+        { name: 'Email Files', extensions: ['eml'] },
+        { name: 'PDF Files', extensions: ['pdf'] },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    }).then(result => {
+      if (!result.canceled && result.filePaths && result.filePaths.length > 0) {
+        handleFileSelection(result.filePaths);
+      }
+    }).catch(err => {
+      console.error('[Renderer] Dialog error:', err);
+      showStatus('Error opening file picker dialog', 'error');
+      
+      // Fall back to regular file input
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.eml,.pdf';
+      input.multiple = true;
+      input.addEventListener('change', (e) => {
+        if (e.target.files && e.target.files.length > 0) {
+          handleFileDrop(e.target.files);
+        }
+      });
+      input.click();
+    });
+  } else {
+    console.log('[Renderer] Native dialog not available, using file input');
+    // Fall back to regular file input
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.eml,.pdf';
+    input.multiple = true;
+    input.addEventListener('change', (e) => {
+      if (e.target.files && e.target.files.length > 0) {
+        handleFileDrop(e.target.files);
+      }
+    });
+    input.click();
+  }
+}
+
+// Process selected files
+function processSelectedFiles() {
+  if (uploadedFiles.length === 0) {
+    showStatus('No files to process', 'error');
+    return;
+  }
+  
+  console.log('[Renderer] Processing selected files:', uploadedFiles);
+  
+  // Show processing state
+  isProcessing = true;
+  dropZone.classList.add('processing');
+  updateGenerateButtonState(false);
+  
+  // Get format and template preferences
+  const formatPreference = selectedFormat || document.querySelector('input[name="format"]:checked')?.value || 'auto';
+  
+  // Send to main process
+  ipc.send('process-dropped-files', {
+    paths: uploadedFiles,
+    formatPreference: formatPreference,
+    selectedTemplate: selectedTemplate
+  });
+  
+  showStatus(`Processing ${uploadedFiles.length} file(s)...`, 'info');
+  
+  // Start progress animation
+  startProgressAnimation();
+}
+
+// Handle files selected via dialog
+function handleFileSelection(filePaths) {
+  console.log('[Renderer] Files selected via dialog:', filePaths);
+  
+  if (!filePaths || filePaths.length === 0) {
+    showStatus('No files selected', 'info');
+    return;
+  }
+  
+  // Store the selected files
+  uploadedFiles = filePaths;
+  
+  // Update UI to reflect files are ready to process
+  updateGenerateButtonState(true);
+  
+  // Update the drop zone to show selected files
+  const uploadContent = dropZone.querySelector('.upload-content');
+  if (uploadContent) {
+    uploadContent.innerHTML = `
+      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#26de81" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+        <polyline points="22 4 12 14.01 9 11.01"></polyline>
+      </svg>
+      <h2>${filePaths.length} ${filePaths.length === 1 ? 'File' : 'Files'} Selected</h2>
+      <p>Click "Generate Kindle Ebook" to convert ${filePaths.length === 1 ? 'this file' : 'these files'}</p>
+    `;
+  }
+  
+  // Also update preview panel
+  if (previewPanel) {
+    previewPanel.innerHTML = `
+      <div class="preview-content">
+        <h3>Files Ready to Process</h3>
+        <ul style="list-style-type: none; padding: 0;">
+          ${filePaths.map(file => `
+            <li style="margin: 8px 0; padding: 10px; background: #f8f9fa; border-radius: 4px;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0366d6" stroke-width="2" style="margin-right: 5px; vertical-align: text-bottom;">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+                <polyline points="10 9 9 9 8 9"></polyline>
+              </svg>
+              ${path.basename(file)}
+              <span style="float: right; color: #666; font-size: 12px;">${path.extname(file).toLowerCase()}</span>
+            </li>
+          `).join('')}
+        </ul>
+        <p>Click "Generate Kindle Ebook" to convert these files.</p>
+      </div>
+    `;
+  }
+  
+  showStatus(`${filePaths.length} ${filePaths.length === 1 ? 'file' : 'files'} selected`, 'success');
+}
+
+// Handle files dropped onto the application
+function handleFileDrop(files) {
+  console.log('[Renderer] Handling dropped files:', files);
+  
+  if (!files || files.length === 0) {
+    console.error('[Renderer] No files to process');
+    showStatus('No files to process', 'error');
+    return;
+  }
+  
+  // Extract file paths
+  const filePaths = [];
+  const fileList = Array.from(files); // Convert to array if it's a FileList
+  
+  fileList.forEach(file => {
+    // In Electron, the file should have a path property
+    if (file.path) {
+      filePaths.push(file.path);
+    } 
+    // Handle string paths directly
+    else if (typeof file === 'string') {
+      filePaths.push(file);
+    }
+    // For Electron's drag events that have files in dataTransfer
+    else if (file.name && typeof file === 'object') {
+      // If we're in Electron but don't have a path property,
+      // log this unusual situation for debugging
+      console.log('[Renderer] File object without path:', file);
+      
+      // For debugging - log what properties are available
+      console.log('[Renderer] Available file properties:', Object.keys(file));
+      
+      // Check if we have a name at least
+      if (file.name) {
+        showStatus('File detected, but path information is restricted. Try using the file picker instead.', 'info');
+      }
+    }
+    // For anything else, provide helpful debug information
+    else {
+      console.error('[Renderer] Unhandled file type:', typeof file, file);
+    }
+  });
+  
+  if (filePaths.length === 0) {
+    console.error('[Renderer] No valid file paths found');
+    showStatus('No valid file paths found. Try using the file picker button instead.', 'error');
+    return;
+  }
+  
+  console.log('[Renderer] Sending file paths to main process:', filePaths);
+  
+  // Store files for potential reprocessing
+  uploadedFiles = filePaths;
+  
+  // Make sure we're sending an array of paths
+  ipc.send('process-dropped-files', { 
+    paths: filePaths,
+    formatPreference: selectedFormat || 'auto',
+    selectedTemplate: selectedTemplate || null
+  });
+  
+  // Show processing indication
+  dropZone.classList.add('processing');
+  isProcessing = true;
+  updateGenerateButtonState(false);
+  showStatus(`Processing ${filePaths.length} file(s)...`, 'info');
+  
+  // Start progress animation
+  startProgressAnimation();
+}
+
+// Handle files selected for processing
+function handleSelectedFiles(files) {
+  if (!files || files.length === 0) return;
+
+  const filePaths = [];
+  for (const file of files) {
+    let filePath = '';
+
+    if (typeof file === 'object' && file.path) {
+      filePath = file.path;
+    } else if (typeof file === 'string') {
+      filePath = file;
+    }
+
+    if (filePath) {
+      filePaths.push(filePath);
+    }
+  }
+
+  if (filePaths.length === 0) {
+    showStatus('No valid files found', 'error');
+    return;
+  }
+  
+  // Store for processing
+  uploadedFiles = filePaths;
+  
+  // Update UI to show files are ready
+  updateGenerateButtonState(true);
+  showStatus(`${filePaths.length} file(s) ready to process`, 'success');
+  
+  // Update preview panel
+  previewPanel.innerHTML = `
+    <div class="preview-content">
+      <h3>Files Ready to Process</h3>
+      <ul style="list-style-type: none; padding: 0;">
+        ${filePaths.map(file => `
+          <li style="margin: 8px 0; padding: 10px; background: #f8f9fa; border-radius: 4px;">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#0366d6" stroke-width="2" style="margin-right: 5px; vertical-align: text-bottom;">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+              <polyline points="14 2 14 8 20 8"></polyline>
+              <line x1="16" y1="13" x2="8" y2="13"></line>
+              <line x1="16" y1="17" x2="8" y2="17"></line>
+              <polyline points="10 9 9 9 8 9"></polyline>
+            </svg>
+            ${path.basename(file)}
+            <span style="float: right; color: #666; font-size: 12px;">${path.extname(file).toLowerCase()}</span>
+          </li>
+        `).join('')}
+      </ul>
+      <p>Click "Generate Kindle Ebook" to convert these files.</p>
+    </div>
+  `;
+}
+
+// Drag & Drop Setup
+function setupDragAndDrop() {
+  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+    document.addEventListener(eventName, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    }, false);
+  });
+
+  dropZone.addEventListener('dragenter', (e) => {
+    console.log('[Renderer] Drag enter event');
+    dropZone.classList.add('drag-over');
+  });
+
+  dropZone.addEventListener('dragleave', (e) => {
+    console.log('[Renderer] Drag leave event');
+    dropZone.classList.remove('drag-over');
+  });
+
+  dropZone.addEventListener('drop', (e) => {
+    console.log('[Renderer] Drop event');
+    dropZone.classList.remove('drag-over');
+    
+    // Use the handleFileDrop function
+    handleFileDrop(e.dataTransfer.files);
+  });
+
+  dropZone.addEventListener('click', () => {
+    if (isProcessing) return;
+    
+    // Use the native file picker if available
+    openFilePicker();
   });
 }
 
-// NEW: Update progress indicator with actual percentage
+// Update progress indicator with actual percentage
 function updateProgressDisplay(percentage, status) {
-  console.log(`Updating progress display: ${percentage}%, status: ${status}`);
+  console.log(`[Renderer] Updating progress display: ${percentage}%, status: ${status}`);
 
   // Update spinner
   const spinner = document.querySelector('.spinner');
@@ -330,7 +640,7 @@ function updateProgressDisplay(percentage, status) {
   }
 }
 
-// NEW: Update generate button state
+// Update generate button state
 function updateGenerateButtonState(enabled) {
   if (generateKindleBtn) {
     generateKindleBtn.disabled = !enabled;
@@ -339,8 +649,14 @@ function updateGenerateButtonState(enabled) {
   }
 }
 
-// NEW: Show template confirmation dialog
+// Show template confirmation dialog
 function showTemplateConfirmation(info) {
+  if (!templateDialog || !detectedName || !detectedType || !detectedConfidence || !templateSelector) {
+    console.error("[Renderer] Template dialog elements not found");
+    processSelectedFiles();
+    return;
+  }
+
   // Fill in newsletter info
   detectedName.textContent = info.name || 'Newsletter';
   detectedType.textContent = capitalizeFirstLetter(info.type || 'generic');
@@ -356,8 +672,12 @@ function showTemplateConfirmation(info) {
   templateDialog.classList.add('active');
 }
 
-// NEW: Update template preview based on selection
+// Update template preview based on selection
 function updateTemplatePreview() {
+  if (!templatePreview || !templateSelector) {
+    return;
+  }
+
   const selectedType = templateSelector.value;
 
   // Remove existing template classes
@@ -415,8 +735,9 @@ function updateTemplatePreview() {
   }
 }
 
+// Preview updates
 function updatePreviewWithSuccess(result) {
-  const formatName = result.formatName || result.format.toUpperCase() || 'EPUB';
+  const formatName = result.formatName || result.format?.toUpperCase() || 'EPUB';
 
   // Create additional files section if we have multiple files
   let additionalFilesSection = '';
@@ -431,7 +752,7 @@ function updatePreviewWithSuccess(result) {
     `;
   }
 
-  // NEW: Add template info if available
+  // Add template info if available
   let templateInfoSection = '';
   if (detectedNewsletterInfo && detectedNewsletterInfo.type && detectedNewsletterInfo.type !== 'generic') {
     templateInfoSection = `
@@ -513,7 +834,7 @@ function updatePreviewWithContent(data) {
     contentHtml = '<p>No content available to preview.</p>';
   }
 
-  // NEW: Template info section if newsletter type detected
+  // Template info section if newsletter type detected
   let templateInfoSection = '';
   if (data.newsletterType && data.newsletterType !== 'generic' &&
       data.newsletterType !== 'pdf' && data.newsletterType !== 'mixed') {
@@ -550,145 +871,7 @@ function updatePreviewWithContent(data) {
   `;
 }
 
-function capitalizeFirstLetter(string) {
-  if (!string) return '';
-  return string.charAt(0).toUpperCase() + string.slice(1);
-}
-
-function cleanupHtmlForPreview(html) {
-  if (!html) return '';
-
-  try {
-    // Create a temporary div to parse and clean the HTML
-    const tempDiv = document.createElement('div');
-    tempDiv.innerHTML = html;
-
-    // Define images variable
-    const images = tempDiv.querySelectorAll('img');
-
-    images.forEach(img => {
-      // Handle images that might not load in the preview
-      img.onerror = () => {
-        img.style.display = 'none';
-      };
-
-      // Make sure images aren't too large for the preview
-      img.style.maxWidth = '100%';
-      img.style.height = 'auto';
-
-      // Fix data-src attributes that are common in newsletters
-      if (img.hasAttribute('data-src') && !img.getAttribute('src')) {
-        img.src = img.getAttribute('data-src');
-      }
-
-      // Handle cid: references in a basic way
-      if (img.src && img.src.startsWith('cid:')) {
-        img.style.border = '1px dashed #ccc';
-        img.style.padding = '8px';
-        img.style.backgroundColor = '#f8f8f8';
-        img.alt = 'Embedded Image';
-      }
-    });
-
-    return tempDiv.innerHTML;
-  } catch (error) {
-    console.error('Error cleaning HTML for preview:', error);
-    return `<p>Error displaying HTML content: ${error.message}</p>`;
-  }
-}
-
-// File Handling
-function handleSelectedFiles(files) {
-  if (!files || files.length === 0) return;
-
-  const filePaths = [];
-  for (const file of files) {
-    let filePath = '';
-
-    if (file instanceof File) {
-      filePath = file.path;
-    } else if (typeof file === 'string') {
-      filePath = file;
-    }
-
-    if (filePath) {
-      let cleanPath = filePath.trim();
-
-      if (cleanPath.startsWith('file://')) {
-        cleanPath = decodeURIComponent(cleanPath.replace(/^file:\/\//, '')).trim();
-      } else {
-        cleanPath = decodeURIComponent(cleanPath).trim();
-      }
-
-      filePaths.push(cleanPath);
-    }
-  }
-
-  console.log('[Renderer] Cleaned file paths:', filePaths);
-  ipcRenderer.send('process-dropped-files', { paths: filePaths });
-}
-
-// NEW: Process dropped files with current settings
-function processDroppedFiles(customFilePaths) {
-  // Use stored paths if not provided
-  const filePaths = Array.isArray(customFilePaths) ? customFilePaths : uploadedFiles;
-
-  if (!filePaths || filePaths.length === 0) {
-    showStatus('No files to process', 'error');
-    return;
-  }
-
-  console.log('Processing files:', filePaths);
-
-  // Set processing state
-  isProcessing = true;
-  dropZone.classList.add('processing');
-  updateGenerateButtonState(false);
-
-  // Reset progress indicators
-  updateProgressDisplay(0, 'Initializing...');
-
-  // Show processing spinner and progress bar
-  previewPanel.innerHTML = `
-    <div class="kindle-preview">
-      <h2>Processing Files</h2>
-      <div class="processing-spinner" style="text-align: center; margin: 20px 0;">
-        <div style="border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 2s linear infinite; margin: 0 auto;"></div>
-      </div>
-      <p id="processing-status" style="text-align:center; font-size:14px; color:#555;">Initializing conversion for ${filePaths.length} file(s)...</p>
-      <div id="processing-progress" style="width: 100%; background-color: #f3f3f3; border-radius: 4px; margin-top: 15px;">
-        <div id="progress-bar" style="width: 0%; height: 20px; background-color: #4CAF50; border-radius: 4px; text-align: center; line-height: 20px; color: white;">0%</div>
-      </div>
-      <div id="processing-notes" style="margin-top: 20px; padding: 10px; background-color: #f8f8f8; border-radius: 4px;">
-        <p><strong>Note:</strong> <span id="processing-message">Processing can take several minutes for large files or multiple newsletters.</span></p>
-      </div>
-      <style>@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }</style>
-    </div>
-  `;
-
-  // Start the progress animation
-  startProgressAnimation();
-
-  // Get the selected format
-  const formatPreference = selectedFormat || document.querySelector('input[name="format"]:checked').value || 'auto';
-  console.log(`Processing with format preference: ${formatPreference}`);
-
-  // Send the file paths and preferences to be processed
-  ipcRenderer.send('process-dropped-files', {
-    paths: filePaths,
-    formatPreference: formatPreference,
-    selectedTemplate: selectedTemplate
-  });
-
-  // Save files for potential reprocessing
-  if (!customFilePaths) {
-    uploadedFiles = filePaths;
-  }
-
-  showStatus(`Processing ${filePaths.length} file(s)...`, 'info');
-}
-
-// Add a function to animate the progress even when we don't have actual progress data
+// Add a function to animate the progress
 function startProgressAnimation() {
   // Clear any existing interval
   if (progressInterval) {
@@ -701,8 +884,8 @@ function startProgressAnimation() {
   const spinner = document.querySelector('.spinner');
 
   // Make sure progress display elements exist
-  if (!progressBar || !processingStatus) {
-    console.error('Progress elements not found, cannot show animation');
+  if (!progressBar && !spinner) {
+    console.error('[Renderer] Progress elements not found, cannot show animation');
     return;
   }
 
@@ -759,7 +942,7 @@ function startProgressAnimation() {
   // Add a timeout to prevent spinning forever if something goes wrong
   setTimeout(() => {
     if (isProcessing && progress < 90) {
-      console.log('Progress timeout reached, forcing error state');
+      console.log('[Renderer] Progress timeout reached, forcing error state');
       // Force error state after 2 minutes if still processing
       if (progressBar) {
         progressBar.style.backgroundColor = '#f44336';
@@ -787,49 +970,9 @@ function getStatusForProgress(progress) {
   return "Processing...";
 }
 
-// Drag & Drop Setup
-function setupDragAndDrop() {
-  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-    document.addEventListener(eventName, (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-    }, false);
-  });
-
-  dropZone.addEventListener('dragenter', (e) => {
-    console.log('Drag enter event');
-    dropZone.classList.add('drag-over');
-  });
-
-  dropZone.addEventListener('dragleave', (e) => {
-    console.log('Drag leave event');
-    dropZone.classList.remove('drag-over');
-  });
-
-  dropZone.addEventListener('drop', (e) => {
-    console.log('Drop event:', e.dataTransfer.files);
-    dropZone.classList.remove('drag-over');
-    handleSelectedFiles(e.dataTransfer.files);
-  });
-
-  dropZone.addEventListener('click', () => {
-    if (isProcessing) return;
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = '.eml,.pdf';
-    input.multiple = true;
-    input.addEventListener('change', (e) => {
-      if (e.target.files && e.target.files.length > 0) {
-        handleSelectedFiles(e.target.files);
-      }
-    });
-    input.click();
-  });
-}
-
 // Utilities
 function clearContent(updateUI = true) {
-  console.log('Clearing content');
+  console.log('[Renderer] Clearing content');
   uploadedFiles = [];
   generatedFilePath = null;
   additionalGeneratedFiles = [];
@@ -869,7 +1012,7 @@ function clearContent(updateUI = true) {
 }
 
 function showStatus(msg, type = 'info', timeout = 4000) {
-  console.log(`Status message: ${msg} (${type})`);
+  console.log(`[Renderer] Status message: ${msg} (${type})`);
   statusMessage.innerText = msg;
   statusMessage.className = `status-message status-${type}`;
   statusMessage.classList.remove('status-hidden');
@@ -890,32 +1033,55 @@ function escapeHtml(unsafe) {
     .replace(/'/g, "&#039;");
 }
 
-// Add a global error handler to catch and display unhandled errors
-window.addEventListener('error', function(event) {
-  console.error('Unhandled error:', event.error);
-  showStatus(`Unhandled error: ${event.error?.message || 'Unknown error'}`, 'error', 10000);
-});
-
-// NEW: Handle file drop
-function handleFileDrop(paths) {
-  console.log('[Renderer] Received file paths:', paths, 'Type:', typeof paths);
-
-  // Validate that paths is an array
-  if (!Array.isArray(paths)) {
-    console.error('[Renderer] Invalid file paths:', paths);
-    showStatus('Error: Invalid file paths received. Please try again.', 'error', 5000);
-    return;
-  }
-
-  // Send valid paths to the main process
-  ipcRenderer.send('process-dropped-files', { paths });
+function capitalizeFirstLetter(string) {
+  if (!string) return '';
+  return string.charAt(0).toUpperCase() + string.slice(1);
 }
 
-// Export the module
-module.exports = {
-  handleSelectedFiles,
-  processDroppedFiles,
-  clearContent,
-  updateProgressDisplay,
-  showStatus
-};
+function cleanupHtmlForPreview(html) {
+  if (!html) return '';
+
+  try {
+    // Create a temporary div to parse and clean the HTML
+    const tempDiv = document.createElement('div');
+    tempDiv.innerHTML = html;
+
+    // Define images variable
+    const images = tempDiv.querySelectorAll('img');
+
+    images.forEach(img => {
+      // Handle images that might not load in the preview
+      img.onerror = () => {
+        img.style.display = 'none';
+      };
+
+      // Make sure images aren't too large for the preview
+      img.style.maxWidth = '100%';
+      img.style.height = 'auto';
+
+      // Fix data-src attributes that are common in newsletters
+      if (img.hasAttribute('data-src') && !img.getAttribute('src')) {
+        img.src = img.getAttribute('data-src');
+      }
+
+      // Handle cid: references in a basic way
+      if (img.src && img.src.startsWith('cid:')) {
+        img.style.border = '1px dashed #ccc';
+        img.style.padding = '8px';
+        img.style.backgroundColor = '#f8f8f8';
+        img.alt = 'Embedded Image';
+      }
+    });
+
+    return tempDiv.innerHTML;
+  } catch (error) {
+    console.error('[Renderer] Error cleaning HTML for preview:', error);
+    return `<p>Error displaying HTML content: ${error.message}</p>`;
+  }
+}
+
+// Global error handler
+window.addEventListener('error', function(event) {
+  console.error('[Renderer] Unhandled error:', event.error);
+  showStatus(`Unhandled error: ${event.error?.message || 'Unknown error'}`, 'error', 10000);
+});

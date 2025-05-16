@@ -89,9 +89,18 @@ function createWindow() {
     width: 1000,
     height: 800,
     webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
-      spellcheck: false // Disable spellcheck if not needed
+      // Use this instead of nodeIntegration for better security
+      preload: path.join(__dirname, 'preload.js'),
+      // Disable nodeIntegration for security
+      nodeIntegration: false,
+      // Enable context isolation for security
+      contextIsolation: true,
+      // Disable remote module
+      enableRemoteModule: false,
+      // Allow file system access through our preload APIs
+      webSecurity: true,
+      // Disable spellcheck if not needed
+      spellcheck: false
     },
     titleBarStyle: 'hiddenInset',
     backgroundColor: '#FFFFFF',
@@ -109,7 +118,7 @@ function createWindow() {
 
   // Add error handling for uncaught exceptions
   process.on('uncaughtException', (error) => {
-    console.error('Uncaught Exception:', error); // Log the full error object
+    console.error('Uncaught Exception:', error);
     logToFile(`UNCAUGHT EXCEPTION: ${error.message}\n${error.stack}`);
 
     if (mainWindow) {
@@ -118,22 +127,14 @@ function createWindow() {
         error: `Uncaught error: ${error.message}`
       });
     }
-    // Optional: Show a dialog to the user
-     if (dialog) {
-        dialog.showErrorBox('Unhandled Error', `An unexpected error occurred: ${error.message}\n\nPlease check the log file app-error-log.txt.`);
-     }
   });
 
   // Add handler for unhandled rejections
   process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason); // Log the full reason
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
     logToFile(`UNHANDLED REJECTION: ${reason instanceof Error ? `${reason.message}\n${reason.stack}` : reason}`);
-     if (dialog) {
-         dialog.showErrorBox('Unhandled Promise Rejection', `An unexpected promise rejection occurred: ${reason instanceof Error ? reason.message : reason}\n\nPlease check the log file app-error-log.txt.`);
-     }
   });
 }
-
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
   logToFile(`UNCAUGHT EXCEPTION: ${error.message}\n${error.stack}`);
@@ -596,48 +597,192 @@ const progressTracker = {
 };
 
 // UPDATED: Process files dropped into the application
-ipcMain.on('process-dropped-files', async (event, { paths: originalPaths }) => {
-  console.log('[Main] Received file paths:', originalPaths);
-
-  const processedPaths = [];
-  for (const originalPath of originalPaths) {
-    let pathStr = String(originalPath).trim();
-
-    if (pathStr.startsWith('file://')) {
-      pathStr = decodeURIComponent(pathStr.replace(/^file:\/\//, '')).trim();
-
-      // Handle macOS-specific extra leading slash
-      if (process.platform === 'darwin' && pathStr.startsWith('/') && !fs.existsSync(pathStr)) {
-        const potentialPath = pathStr.substring(1);
-        if (fs.existsSync(potentialPath)) pathStr = potentialPath;
-      }
-    } else {
-      pathStr = decodeURIComponent(pathStr).trim();
+ipcMain.on('process-dropped-files', async (event, data) => {
+  console.log('[Main] Received process-dropped-files event:', typeof data, data ? Object.keys(data) : 'null');
+  
+  // Check if data exists and has expected structure
+  if (!data) {
+    console.error('[Main] No data received in process-dropped-files event');
+    return event.reply('ebook-generated', {
+      success: false,
+      error: 'Internal error: No file data received'
+    });
+  }
+  
+  // Ensure we have paths to process
+  if (!data.paths || !Array.isArray(data.paths) || data.paths.length === 0) {
+    console.error('[Main] Invalid or empty paths in process-dropped-files event:', data.paths);
+    return event.reply('ebook-generated', {
+      success: false,
+      error: 'No valid files were selected for processing'
+    });
+  }
+  
+  // Log received paths for debugging
+  console.log('[Main] Received file paths:', data.paths);
+  
+  // Ensure paths are strings and exist on filesystem
+  const validPaths = [];
+  for (const filePath of data.paths) {
+    if (typeof filePath !== 'string') {
+      console.warn(`[Main] Skipping non-string path: ${typeof filePath}`);
+      continue;
     }
-
-    if (fs.existsSync(pathStr)) {
-      processedPaths.push(pathStr);
-      console.log(`[Main] Valid file path: ${pathStr}`);
-    } else {
-      console.warn(`[Main] File not found: ${pathStr}`);
+    
+    const cleanPath = filePath.trim();
+    
+    try {
+      if (fs.existsSync(cleanPath)) {
+        validPaths.push(cleanPath);
+        console.log(`[Main] Valid file found: ${cleanPath}`);
+      } else {
+        console.warn(`[Main] File does not exist: ${cleanPath}`);
+      }
+    } catch (error) {
+      console.error(`[Main] Error checking file existence: ${error.message}`);
     }
   }
-
-  if (processedPaths.length === 0) {
-    console.error('[Main] No valid files found after processing paths.');
+  
+  if (validPaths.length === 0) {
+    console.error('[Main] No valid files found after checking paths');
     return event.reply('ebook-generated', {
       success: false,
       error: 'No valid files found. Please ensure the files exist and are accessible.'
     });
   }
-
-  console.log('[Main] Processed file paths:', processedPaths);
-  // Continue with further processing...
+  
+  console.log(`[Main] Processing ${validPaths.length} valid files`);
+  
+  // Extract format and template preferences
+  const formatPreference = data.formatPreference || 'auto';
+  const selectedTemplate = data.selectedTemplate || null;
+  
+  // Categorize files by type
+  const emlFiles = [];
+  const pdfFiles = [];
+  
+  // Create task ID for progress tracking
+  const taskId = `task_${Date.now()}`;
+  if (progressTracker && typeof progressTracker.startTask === 'function') {
+    progressTracker.startTask(taskId, validPaths.length + 3); // Add extra steps for completion
+  }
+  
+  validPaths.forEach(filePath => {
+    const ext = path.extname(filePath).toLowerCase();
+    if (ext === '.eml') {
+      emlFiles.push(filePath);
+    } else if (ext === '.pdf') {
+      pdfFiles.push(filePath);
+    } else {
+      console.warn(`[Main] Unsupported file type: ${ext} for ${filePath}`);
+    }
+  });
+  
+  try {
+    // Handle different file type combinations
+    if (emlFiles.length > 0 && pdfFiles.length === 0) {
+      // Only EML files
+      if (emlFiles.length === 1) {
+        // Process single EML - check if function exists
+        if (typeof processSingleEml === 'function') {
+          await processSingleEml(event, emlFiles[0], { formatPreference, selectedTemplate }, taskId);
+        } else {
+          // Fallback if function doesn't exist
+          console.error('[Main] processSingleEml function is not defined');
+          event.reply('ebook-generated', {
+            success: false,
+            error: 'Internal error: Email processing function not available'
+          });
+        }
+      } else {
+        // Process multiple EMLs - check if function exists
+        if (typeof processMultipleEmls === 'function') {
+          await processMultipleEmls(event, emlFiles, { formatPreference, selectedTemplate }, taskId);
+        } else {
+          // Fallback if function doesn't exist
+          console.error('[Main] processMultipleEmls function is not defined');
+          event.reply('ebook-generated', {
+            success: false,
+            error: 'Internal error: Multiple email processing function not available'
+          });
+        }
+      }
+    } else if (pdfFiles.length > 0 && emlFiles.length === 0) {
+      // Only PDF files
+      if (pdfFiles.length === 1) {
+        // Process single PDF - check if function exists
+        if (typeof processSinglePdf === 'function') {
+          await processSinglePdf(event, pdfFiles[0], { formatPreference }, taskId);
+        } else {
+          // Fallback if function doesn't exist
+          console.error('[Main] processSinglePdf function is not defined');
+          event.reply('ebook-generated', {
+            success: false,
+            error: 'Internal error: PDF processing function not available'
+          });
+        }
+      } else {
+        // Process multiple PDFs - check if function exists
+        if (typeof processMultiplePdfs === 'function') {
+          await processMultiplePdfs(event, pdfFiles, { formatPreference }, taskId);
+        } else {
+          // Fallback if function doesn't exist
+          console.error('[Main] processMultiplePdfs function is not defined');
+          event.reply('ebook-generated', {
+            success: false,
+            error: 'Internal error: Multiple PDF processing function not available'
+          });
+        }
+      }
+    } else if (emlFiles.length > 0 && pdfFiles.length > 0) {
+      // Mixed file types
+      if (typeof processMixedFiles === 'function') {
+        await processMixedFiles(event, emlFiles, pdfFiles, { formatPreference, selectedTemplate }, taskId);
+      } else {
+        // Fallback if function doesn't exist
+        console.error('[Main] processMixedFiles function is not defined');
+        event.reply('ebook-generated', {
+          success: false,
+          error: 'Internal error: Mixed file processing function not available'
+        });
+      }
+    } else {
+      console.error('[Main] No valid .eml or .pdf files found');
+      event.reply('ebook-generated', {
+        success: false,
+        error: 'No valid email (.eml) or PDF (.pdf) files found for processing'
+      });
+    }
+    
+    // Complete the task if we have a progress tracker
+    if (progressTracker && typeof progressTracker.completeTask === 'function') {
+      progressTracker.completeTask(taskId);
+    }
+  } catch (error) {
+    console.error(`[Main] Error processing files: ${error.message}\n${error.stack}`);
+    
+    // Record error in progress tracker if available
+    if (progressTracker && typeof progressTracker.addError === 'function') {
+      progressTracker.addError(taskId, error);
+    }
+    
+    event.reply('ebook-generated', {
+      success: false,
+      error: `Error processing files: ${error.message}`
+    });
+  }
 });
 
 // UPDATED: Add options parameter and progress tracking to processSingleEml function
 async function processSingleEml(event, emlFilePath, options = {}, taskId = null) {
-  console.log(`[Main] Received file path for processing: ${emlFilePath}`);
+  console.log(`[Main] Processing single EML file: ${emlFilePath}`);
+  
+  // Update progress if we have a taskId
+  if (taskId) {
+    progressTracker.updateProgress(taskId, 1);
+    progressTracker.sendProgressToRenderer(taskId, 20, `Validating email file...`);
+  }
+  
   if (!fs.existsSync(emlFilePath)) {
     console.error(`[Main] File not found: ${emlFilePath}`);
     return event.reply('ebook-generated', {
@@ -645,8 +790,96 @@ async function processSingleEml(event, emlFilePath, options = {}, taskId = null)
       error: `File not found: ${path.basename(emlFilePath)}`
     });
   }
+  
+  // Define output path for the ebook
+  const userHome = os.homedir();
+  const downloadDir = path.join(userHome, 'Downloads', 'kindle-books');
+  ensureRequiredDirectories(); // Ensure download dir exists
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const baseOutputPath = path.join(downloadDir, `${path.basename(emlFilePath, '.eml')}_${timestamp}`);
+  
+  try {
+    // Update progress
+    if (taskId) {
+      progressTracker.updateProgress(taskId, 1);
+      progressTracker.sendProgressToRenderer(taskId, 40, `Parsing email content...`);
+    }
+    
+    // First, analyze the newsletter to detect its type
+    let emlData;
+    try {
+      emlData = await parseEmailForPreview(emlFilePath);
+      console.log(`[Main] Newsletter detected as: ${emlData?.newsletterInfo?.type || 'generic'}`);
+    } catch (analyzeError) {
+      console.error(`[Main] Error analyzing email: ${analyzeError.message}`);
+      // Continue with generic template if analysis fails
+      emlData = { newsletterInfo: { type: 'generic', name: 'Newsletter', confidence: 0 } };
+    }
+    
+    // Update progress
+    if (taskId) {
+      progressTracker.updateProgress(taskId, 1);
+      progressTracker.sendProgressToRenderer(taskId, 60, `Converting to ebook format...`);
+    }
+    
+    // Call the emlToEbook.convertEmlToEbook function with options
+    const { filePath, format } = await emlToEbook.convertEmlToEbook(
+      emlFilePath,
+      baseOutputPath + '.epub',
+      {
+        formatPreference: options.formatPreference || 'auto',
+        selectedTemplate: options.selectedTemplate || emlData?.newsletterInfo?.type || 'generic'
+      }
+    );
+    
+    // Final progress update
+    if (taskId) {
+      progressTracker.updateProgress(taskId, 1);
+      progressTracker.sendProgressToRenderer(taskId, 90, `Finalizing ebook...`);
+    }
+    
+    console.log(`[Main] Email converted successfully to: ${filePath} (${format} format)`);
+    
+    event.reply('ebook-generated', {
+      success: true,
+      filePath: filePath,
+      format: format,
+      formatName: format.toUpperCase(),
+      preview: emlData
+    });
+  } catch (error) {
+    console.error(`[Main] Error converting email to ebook: ${error.message}\n${error.stack}`);
+    event.reply('ebook-generated', {
+      success: false,
+      error: `Error converting to ebook: ${error.message}`
+    });
+  }
+}
 
-  // Continue processing...
+// Helper function to parse email for preview
+async function parseEmailForPreview(emlFilePath) {
+  try {
+    const { parseEmlFile } = require('./utils/eml-parser');
+    const emlContent = await parseEmlFile(emlFilePath);
+    
+    // Extract the relevant data for preview
+    return {
+      subject: emlContent.subject || path.basename(emlFilePath, '.eml'),
+      html: emlContent.html,
+      text: emlContent.text,
+      date: emlContent.date,
+      from: emlContent.from,
+      newsletterInfo: emlContent.newsletterInfo || { type: 'generic', name: 'Newsletter', confidence: 0 }
+    };
+  } catch (error) {
+    console.error(`[Main] Error parsing email for preview: ${error.message}`);
+    // Return basic info on error
+    return {
+      subject: path.basename(emlFilePath, '.eml'),
+      text: `Error parsing email: ${error.message}`,
+      newsletterInfo: { type: 'generic', name: 'Newsletter', confidence: 0 }
+    };
+  }
 }
 
 // UPDATED: Add options parameter and progress tracking to processMultipleEmls function
