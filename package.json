@@ -1,0 +1,53 @@
+{
+  "name": "kindle-newsletter-formatter",
+  "version": "1.0.0",
+  "description": "App to format newsletters for Kindle",
+  "main": "main.js",
+  "scripts": {
+    "start": "node create-directories.js && electron .",
+    "build": "electron-builder --mac",
+    "setup": "node create-directories.js"
+  },
+  "author": "Your Name",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "^35.1.5",
+    "electron-builder": "^24.0.0"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "epub-gen": "^0.1.0",
+    "epub2": "^3.0.2",
+    "jimp": "^0.22.12",
+    "mailparser": "^3.7.2",
+    "marked": "^5.1.2",
+    "node-fetch": "^2.7.0",
+    "pdf-lib": "^1.17.1",
+    "puppeteer": "^22.15.0",
+    "temp": "^0.9.4",
+    "turndown": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.yourname.kindleformatter",
+    "productName": "Kindle Newsletter Formatter",
+    "mac": {
+      "category": "public.app-category.utilities",
+      "icon": "assets/icon.icns"
+    },
+    "win": {
+      "icon": "assets/icon.ico"
+    },
+    "linux": {
+      "icon": "assets/icon.png"
+    },
+    "extraResources": [
+      {
+        "from": "node_modules/puppeteer/.local-chromium",
+        "to": "puppeteer/.local-chromium",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
+  }
+}

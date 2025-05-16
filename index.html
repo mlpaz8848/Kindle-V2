@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kindle Newsletter Formatter</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-container">
+    <div class="app-header">
+      <h1>Kindle Newsletter Formatter</h1>
+    </div>
+
+    <div class="main-content">
+      <div class="input-section">
+        <div id="eml-drop-zone" class="eml-drop-zone">
+          <div class="upload-content">
+            <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="17 8 12 3 7 8"></polyline>
+              <line x1="12" y1="3" x2="12" y2="15"></line>
+            </svg>
+            <h2>Drop Email or PDF Files Here</h2>
+            <p>Drop one or multiple email (.eml) or PDF files to convert for Kindle</p>
+          </div>
+          <div class="processing-content">
+            <div class="spinner" data-progress="0%"></div>
+            <p>Processing your files...</p>
+          </div>
+          <div class="success-content">
+            <svg width="60" height="60" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
+              <polyline points="22 4 12 14.01 9 11.01"></polyline>
+            </svg>
+            <h2>Ebook Generated</h2>
+            <p>Your files are ready for Kindle</p>
+          </div>
+        </div>
+
+        <!-- NEW: Format selection section -->
+        <div class="format-options">
+          <h3>Output Format</h3>
+          <div class="format-selector">
+            <label class="format-option">
+              <input type="radio" name="format" value="auto" checked>
+              <span class="format-label">Auto (AZW3 if possible)</span>
+              <span class="format-description">Automatically use the best format for your device</span>
+            </label>
+            <label class="format-option">
+              <input type="radio" name="format" value="azw3">
+              <span class="format-label">AZW3</span>
+              <span class="format-description">Native Kindle format with enhanced layout</span>
+            </label>
+            <label class="format-option">
+              <input type="radio" name="format" value="epub">
+              <span class="format-label">EPUB</span>
+              <span class="format-description">Universal ebook format (may require conversion)</span>
+            </label>
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="generate-kindle-pdf-btn" class="primary-btn" disabled>Generate Kindle Ebook</button>
+          <button id="clear-btn" class="secondary-btn">Clear</button>
+        </div>
+
+        <div class="output-info">
+          <h3>Output Location</h3>
+          <div class="output-path">
+            <p id="output-path-display">~/Downloads/kindle-books</p>
+          </div>
+          <div class="button-row">
+            <button id="open-pdf-btn" class="secondary-btn action-btn" disabled>Open Ebook</button>
+            <button id="show-in-folder-btn" class="secondary-btn action-btn" disabled>Show in Folder</button>
+          </div>
+
+          <div class="button-row" style="margin-top: 10px;">
+            <button id="open-send-to-kindle-btn" class="primary-btn action-btn" disabled>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="margin-right: 5px; vertical-align: text-bottom;">
+                <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path>
+                <polyline points="22,6 12,13 2,6"></polyline>
+              </svg>
+              Open Send to Kindle
+            </button>
+          </div>
+
+          <p class="info-note">Ebook files will be saved in this folder</p>
+        </div>
+      </div>
+
+      <div class="preview-section">
+        <h2>Preview</h2>
+        <div id="preview-content" class="preview-panel">
+          <div class="placeholder-message">Drop email (.eml) or PDF files to begin</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- NEW: Template confirmation dialog -->
+    <div id="template-dialog" class="dialog">
+      <div class="dialog-content">
+        <h2>Newsletter Format Detected</h2>
+        <p class="dialog-message">We've detected the following newsletter type:</p>
+        <div class="detected-info">
+          <div id="detected-name" class="detected-name">Newsletter Name</div>
+          <div id="detected-type" class="detected-type">Type: <span>Generic</span></div>
+          <div id="detected-confidence" class="detected-confidence">Confidence: <span>60%</span></div>
+        </div>
+        <p>Would you like to use the specialized template for this newsletter type?</p>
+        <div class="template-preview">
+          <div id="template-preview-content">
+            <p class="template-example">Example text formatted with the detected template.</p>
+            <p class="template-example">Paragraphs will be optimized for reading on Kindle devices.</p>
+            <blockquote class="template-example">Quotes and references will be properly styled.</blockquote>
+          </div>
+        </div>
+        <div class="template-options">
+          <select id="template-selector">
+            <option value="auto">Auto-detected (Recommended)</option>
+            <option value="generic">Generic Newsletter</option>
+            <option value="stratechery">Stratechery</option>
+            <option value="substack">Substack</option>
+            <option value="axios">Axios</option>
+            <option value="bulletinmedia">Bulletin Media</option>
+            <option value="onetech">OneTech/Phillip</option>
+            <option value="jeffselingo">Jeff Selingo</option>
+          </select>
+        </div>
+        <div class="dialog-buttons">
+          <button id="template-confirm-btn" class="primary-btn">Confirm</button>
+          <button id="template-cancel-btn" class="secondary-btn">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="status-message" class="status-message status-hidden"></div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
